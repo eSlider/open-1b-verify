@@ -1,0 +1,10 @@
+# derived / bulky workdirs
+audit/
+inference/
+gitea/
+.venv/
+.venv-*/
+# python / wheels / models
+*.whl
+*.gguf
+__pycache__/
