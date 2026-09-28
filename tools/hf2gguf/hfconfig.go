@@ -14,23 +14,23 @@ import (
 )
 
 type hfConfigFile struct {
-	ModelType             string `json:"model_type"`
-	HiddenSize            int64  `json:"hidden_size"`
-	NumHiddenLayers       int64  `json:"num_hidden_layers"`
-	NumAttentionHeads     int64  `json:"num_attention_heads"`
-	NumKeyValueHeads      int64  `json:"num_key_value_heads"`
-	HeadDim               int64  `json:"head_dim"`
-	IntermediateSize      int64  `json:"intermediate_size"`
-	VocabSize             int64  `json:"vocab_size"`
-	MaxPositionEmbeddings int64  `json:"max_position_embeddings"`
+	ModelType             string  `json:"model_type"`
+	HiddenSize            int64   `json:"hidden_size"`
+	NumHiddenLayers       int64   `json:"num_hidden_layers"`
+	NumAttentionHeads     int64   `json:"num_attention_heads"`
+	NumKeyValueHeads      int64   `json:"num_key_value_heads"`
+	HeadDim               int64   `json:"head_dim"`
+	IntermediateSize      int64   `json:"intermediate_size"`
+	VocabSize             int64   `json:"vocab_size"`
+	MaxPositionEmbeddings int64   `json:"max_position_embeddings"`
 	RopeTheta             float64 `json:"rope_theta"`
 	RMSNormEps            float64 `json:"rms_norm_eps"`
-	TieWordEmbeddings     bool   `json:"tie_word_embeddings"`
-	QKNorm                bool   `json:"qk_norm"`
-	QKNormGain            bool   `json:"qk_norm_gain"`
-	EmbeddingNorm         bool   `json:"embedding_norm"`
-	SlidingWindow         int64  `json:"sliding_window"`
-	SWAFullEvery          int64  `json:"swa_full_every"`
+	TieWordEmbeddings     bool    `json:"tie_word_embeddings"`
+	QKNorm                bool    `json:"qk_norm"`
+	QKNormGain            bool    `json:"qk_norm_gain"`
+	EmbeddingNorm         bool    `json:"embedding_norm"`
+	SlidingWindow         int64   `json:"sliding_window"`
+	SWAFullEvery          int64   `json:"swa_full_every"`
 }
 
 func findKV(kvs []rawKV, key string) (rawKV, bool) {
@@ -100,9 +100,9 @@ func validateConfig(path string, kvs []rawKV) error {
 }
 
 type tokConfigFile struct {
-	EOSToken      string            `json:"eos_token"`
-	ModelMaxLen   int64             `json:"model_max_length"`
-	ChatTemplate  string            `json:"chat_template"`
+	EOSToken      string `json:"eos_token"`
+	ModelMaxLen   int64  `json:"model_max_length"`
+	ChatTemplate  string `json:"chat_template"`
 	AddedDecoders map[string]struct {
 		Content string `json:"content"`
 	} `json:"added_tokens_decoder"`
