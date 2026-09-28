@@ -26,8 +26,8 @@ func TestF32BitsToF16(t *testing.T) {
 		{"neginf", 0xff800000, 0xfc00},
 		{"qnan", 0x7fc00000, 0x7e00},
 		{"snan", 0x7f800001, 0x7e00},
-		{"min_normal", 0x38800000, 0x0400}, // 2^-14
-		{"min_subnormal", 0x33800000, 0x0001}, // 2^-24
+		{"min_normal", 0x38800000, 0x0400},       // 2^-14
+		{"min_subnormal", 0x33800000, 0x0001},    // 2^-24
 		{"tie_to_even_zero", 0x33000000, 0x0000}, // 2^-25 (half of min subnormal)
 		{"tie_to_even_two", 0x33c00000, 0x0002},  // 3 * 2^-25
 		{"one_tenth", 0x3dcccccd, 0x2e66},

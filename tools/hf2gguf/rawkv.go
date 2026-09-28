@@ -90,9 +90,9 @@ func (t ggufBType) size() int {
 type rawKV struct {
 	Key      string
 	BType    ggufBType
-	Int      int64    // integer/bool scalars
-	Float    float64  // float scalars
-	Str      string   // string scalars
+	Int      int64     // integer/bool scalars
+	Float    float64   // float scalars
+	Str      string    // string scalars
 	ElemType ggufBType // arrays: element type
 	Count    uint64    // arrays: element count
 	Raw      []byte    // arrays: concatenated element bytes (excludes elem_type+count)
