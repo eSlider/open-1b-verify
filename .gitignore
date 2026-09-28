@@ -8,3 +8,6 @@ gitea/
 *.whl
 *.gguf
 __pycache__/
+
+# compiled tool binaries
+/tools/hf2gguf/hf2gguf

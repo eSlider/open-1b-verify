@@ -12,7 +12,7 @@
 |--------|--------|
 | Аудит init-unit open-1b (CPU) | ✅ **MATCH** — `state_hash 16554a11…`; см. [`reports/audit-open1b-init.md`](reports/audit-open1b-init.md) |
 | Аудит тренировочного интервала | ⛔ заблокирован (нет опубликованного interval-unit + RAM/диск) |
-| Локальный inference на Arc B580 | 🔄 в работе |
+| Локальный inference на Arc B580 | ✅ **работает** — Go-конвертер, GGUF байт-идентичен; **~114 tok/s** decode, ~892 prefill, ~3.6 GiB VRAM; см. [`reports/open1b-local-inference.md`](reports/open1b-local-inference.md) |
 
 ## Ссылки
 
