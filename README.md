@@ -22,7 +22,36 @@ path; for inference we wrote our own Go GGUF converter.
 
 Details: [`docs/audit-open1b-init.md`](docs/audit-open1b-init.md),
 [`docs/open1b-local-inference.md`](docs/open1b-local-inference.md),
-[`docs/benchmarks.md`](docs/benchmarks.md).
+[`docs/benchmarks.md`](docs/benchmarks.md),
+[`docs/inference-stack.md`](docs/inference-stack.md).
+
+## How it works
+
+**Audit — replay one published commitment and compare.**
+
+```mermaid
+flowchart LR
+  KIT["Gensyn audit kit"] --> SHA{"sha256\nvs kit.json"}
+  SHA --> WHL["repop + pretrain wheels"]
+  WHL --> REPLAY["pretrain-audit-replay\n--from-init --device cpu"]
+  REPLAY --> H1["regenerated\ninit state hash"]
+  KIT --> H2["published\ncommitment"]
+  H1 --> CMP{"equal?"}
+  H2 --> CMP
+  CMP -->|yes| OK["MATCH"]
+  CMP -->|no| BAD["MISMATCH"]
+```
+
+**Inference — convert in Go, serve on one Arc (the engine is a patched llama.cpp).**
+
+```mermaid
+flowchart LR
+  HF["HF checkpoint\nmodel.safetensors (fp32)"] --> GO["tools/hf2gguf\n(pure Go)"]
+  GO --> GGUF["GGUF (f16)\nbyte-identical to reference"]
+  GGUF --> LC["llama.cpp Vulkan\nupstream + open1b.patch"]
+  LC --> GPU["Intel Arc B580"]
+  GPU --> API["llama-server HTTP"]
+```
 
 ## Repository layout
 
@@ -31,6 +60,8 @@ docs/
   audit-open1b-init.md      # init-unit audit report (raw evidence)
   open1b-local-inference.md # local bring-up report
   benchmarks.md             # speed benchmarks + reference comparison
+  inference-stack.md        # how llama.cpp was built/launched (NOT stock)
+  llama-cpp-open1b.patch    # local Open1B patch applied to llama.cpp
 tools/hf2gguf/              # pure-Go safetensors → GGUF converter (dump/convert/verify)
 ```
 
@@ -54,8 +85,9 @@ the vendor harness on a plain CPU regenerates the `1b_repop_v2` initial state ha
 `tools/hf2gguf` reads the HF checkpoint (`config.json`, `model.safetensors`,
 `tokenizer.json`) and writes a GGUF file, using
 [`github.com/cymertek/go-gguf`](https://github.com/cymertek/go-gguf) for GGUF
-read/write. The reference GGUF produced by Gensyn's converter is used **read-only
-as the schema oracle**, so the output is validated byte-for-byte.
+read/write. A reference GGUF produced by llama.cpp's `convert_hf_to_gguf.py`
+**with our [Open1B patch](docs/llama-cpp-open1b.patch)** is used **read-only as
+the schema oracle**, so the output is validated byte-for-byte.
 
 ```bash
 cd tools/hf2gguf
@@ -75,6 +107,10 @@ go build -o hf2gguf .
 two files share SHA-256 `a18530417c732bb115a3501a7e1388ea7a54bd2a96c70be571d1249aa210fbae`.
 
 ## Running the model locally
+
+> **Engine caveat:** open-1b needs an `open1b` architecture that upstream llama.cpp
+> does not have. We run a build with a local patch — see
+> [`docs/inference-stack.md`](docs/inference-stack.md).
 
 Serve the (or our Go-built) GGUF on one Arc B580 with llama.cpp's Vulkan backend:
 
