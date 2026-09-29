@@ -1,0 +1,437 @@
+diff --git a/conversion/__init__.py b/conversion/__init__.py
+index 4d58bcd10..b869b4dc8 100644
+--- a/conversion/__init__.py
++++ b/conversion/__init__.py
+@@ -201,6 +201,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
+     "OlmoeForCausalLM": "olmo",
+     "MuseGlimmerAssistantModel": "muse_glimmer",
+     "MuseGlimmerForConditionalGeneration": "muse_glimmer",
++    "Open1BForCausalLM": "open1b",
+     "OpenELMForCausalLM": "openelm",
+     "OrionForCausalLM": "orion",
+     "PLMForCausalLM": "plm",
+diff --git a/conversion/open1b.py b/conversion/open1b.py
+new file mode 100644
+index 000000000..7ace1adc7
+--- /dev/null
++++ b/conversion/open1b.py
+@@ -0,0 +1,52 @@
++from __future__ import annotations
++
++from typing import Iterable, TYPE_CHECKING
++
++if TYPE_CHECKING:
++    from torch import Tensor
++
++from .base import ModelBase, TextModel, gguf, logger
++
++
++@ModelBase.register("Open1BForCausalLM")
++@ModelBase.example("Gensyn/open-1b-sft")
++class Open1BModel(TextModel):
++    model_arch = gguf.MODEL_ARCH.OPEN1B
++
++    def get_vocab_base_pre(self, tokenizer) -> str:
++        # open-1b's tokenizer.json declares a `<Split>` step whose pattern is
++        # serialized with the "String" variant (a literal `\d`, not a regex),
++        # so it is a no-op and the effective pre-tokenizer is plain byte-level
++        # BPE with the GPT-2 regex. That is exactly llama.cpp's "gpt-2" pre.
++        return "gpt-2"
++
++    def set_gguf_parameters(self):
++        super().set_gguf_parameters()
++
++        sliding_window = self.hparams["sliding_window"]
++        self.gguf_writer.add_sliding_window(sliding_window)
++        logger.info(f"gguf: sliding window = {sliding_window}")
++
++        # open-1b is full-causal on the last layer of every `swa_full_every`
++        # group and on the final layer; the runtime applies that exact pattern.
++        swa_full_every = self.hparams["swa_full_every"]
++        self.gguf_writer.add_sliding_window_pattern(swa_full_every)
++        logger.info(f"gguf: sliding window pattern period = {swa_full_every}")
++
++    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
++        # LSQ per-channel weight scales are not materialised: the released
++        # master weights are used directly, equivalent to quantized_forward=false.
++        if name.endswith(".weight_scale"):
++            return
++
++        # the checkpoint stores a fused gate+up projection; split it for ggml
++        if name.endswith("ffn.w_gate_up.weight"):
++            assert bid is not None
++            n_ff = data_torch.shape[0] // 2
++            gate = data_torch[:n_ff].contiguous()
++            up   = data_torch[n_ff:].contiguous()
++            yield (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), gate)
++            yield (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP,   bid), up)
++            return
++
++        yield from super().modify_tensors(data_torch, name, bid)
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index d3a639f37..146d0cebe 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -630,6 +630,7 @@ class MODEL_ARCH(IntEnum):
+     NANBEIGE         = auto()
+     QWEN3TTS         = auto()
+     POCKETTTS        = auto()
++    OPEN1B           = auto()
+ 
+ 
+ class VISION_PROJECTOR_TYPE(IntEnum):
+@@ -1385,6 +1386,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+     MODEL_ARCH.NANBEIGE:         "nanbeige",
+     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
+     MODEL_ARCH.POCKETTTS:        "pockettts",
++    MODEL_ARCH.OPEN1B:           "open1b",
+ }
+ 
+ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
+@@ -5528,6 +5530,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+         MODEL_TENSOR.FFN_DOWN,
+         MODEL_TENSOR.FFN_UP,
+     ],
++    MODEL_ARCH.OPEN1B: [
++        MODEL_TENSOR.TOKEN_EMBD,
++        MODEL_TENSOR.TOKEN_EMBD_NORM,
++        MODEL_TENSOR.OUTPUT_NORM,
++        MODEL_TENSOR.OUTPUT,
++        MODEL_TENSOR.ATTN_NORM,
++        MODEL_TENSOR.ATTN_Q,
++        MODEL_TENSOR.ATTN_K,
++        MODEL_TENSOR.ATTN_V,
++        MODEL_TENSOR.ATTN_OUT,
++        MODEL_TENSOR.FFN_NORM,
++        MODEL_TENSOR.FFN_GATE,
++        MODEL_TENSOR.FFN_UP,
++        MODEL_TENSOR.FFN_DOWN,
++    ],
+ }
+ 
+ # tensors that will not be serialized
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index d2dfeece5..ac5ba7c75 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -35,6 +35,7 @@ class TensorNameMap:
+             "model.transformer.wte",                     # llada
+             "embed_tokens",                              # qwen3-embedding
+             "model.embed",                               # talkie
++            "embedding.tok_embeddings",                  # open1b
+         ),
+ 
+         # Masked embeddings
+@@ -63,6 +64,7 @@ class TensorNameMap:
+             "model.layers.0.pre_norm",    # rwkv7
+             "backbone.norm",              # wavtokenizer
+             "model.embedding_norm",       # lfm2
++            "emb_norm",                   # open1b
+         ),
+ 
+         # Position embeddings
+@@ -86,6 +88,7 @@ class TensorNameMap:
+             "model.lm_head",             # dflash
+             "model.transformer.ff_out",  # llada
+             "head.decoder",              # modern-bert
++            "embedding.output",          # open1b
+         ),
+         MODEL_TENSOR.DENSE_2_OUT: (
+             "dense_2_out",  # embeddinggemma
+@@ -116,6 +119,7 @@ class TensorNameMap:
+             "model.transformer.ln_f",                  # llada
+             "final_norm",                              # modern-bert
+             "model.norm",                              # cogvlm
++            "norm_out",                                # open1b
+         ),
+ 
+         # Rope frequencies
+@@ -2761,6 +2765,29 @@ class TensorNameMap:
+ 
+     # architecture-specific block mappings
+     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
++        MODEL_ARCH.OPEN1B: {
++            MODEL_TENSOR.ATTN_NORM: (
++                "blocks.{bid}.norm1",
++            ),
++            MODEL_TENSOR.FFN_NORM: (
++                "blocks.{bid}.norm2",
++            ),
++            MODEL_TENSOR.ATTN_Q: (
++                "blocks.{bid}.attn.wq",
++            ),
++            MODEL_TENSOR.ATTN_K: (
++                "blocks.{bid}.attn.wk",
++            ),
++            MODEL_TENSOR.ATTN_V: (
++                "blocks.{bid}.attn.wv",
++            ),
++            MODEL_TENSOR.ATTN_OUT: (
++                "blocks.{bid}.attn.wo",
++            ),
++            MODEL_TENSOR.FFN_DOWN: (
++                "blocks.{bid}.ffn.w_down",
++            ),
++        },
+         MODEL_ARCH.ARCTIC: {
+             MODEL_TENSOR.FFN_NORM: (
+                 "model.layers.{bid}.residual_layernorm",
+diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+index b5efb7206..9951cf5ce 100644
+--- a/src/llama-arch.cpp
++++ b/src/llama-arch.cpp
+@@ -156,6 +156,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
+     { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
+     { LLM_ARCH_POCKETTTS,        "pockettts"        },
++    { LLM_ARCH_OPEN1B,           "open1b"           },
+     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
+ };
+ 
+diff --git a/src/llama-arch.h b/src/llama-arch.h
+index f1d173a57..02a0bee15 100644
+--- a/src/llama-arch.h
++++ b/src/llama-arch.h
+@@ -161,6 +161,7 @@ enum llm_arch {
+     LLM_ARCH_QWEN3TTS,
+     LLM_ARCH_POCKETTTS,
+     LLM_ARCH_MINIMAX_01,
++    LLM_ARCH_OPEN1B,
+     LLM_ARCH_UNKNOWN,
+ };
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index d10b60afd..b12c43d46 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -108,6 +108,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+             return new llama_model_qwen2vl(params);
+         case LLM_ARCH_QWEN2MOE:
+             return new llama_model_qwen2moe(params);
++        case LLM_ARCH_OPEN1B:
++            return new llama_model_open1b(params);
+         case LLM_ARCH_QWEN3:
+             return new llama_model_qwen3(params);
+         case LLM_ARCH_QWEN3MOE:
+@@ -2943,6 +2945,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+         case LLM_ARCH_DOTS3NOTE:
+         case LLM_ARCH_NANBEIGE:
+         case LLM_ARCH_POCKETTTS:
++        // open-1b pairs consecutive head values (interleaved-pair RoPE)
++        case LLM_ARCH_OPEN1B:
+         // HY_V4 rotates consecutive pairs, matching the reference implementation
+         case LLM_ARCH_HY_V4:
+             return LLAMA_ROPE_TYPE_NORM;
+diff --git a/src/models/models.h b/src/models/models.h
+index 87195fddd..d2e30faab 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -583,6 +583,20 @@ struct llama_model_qwen3 : public llama_model_base {
+ };
+ 
+ 
++struct llama_model_open1b : public llama_model_base {
++    llama_model_open1b(const struct llama_model_params & params) : llama_model_base(params) {}
++    void load_arch_hparams(llama_model_loader & ml) override;
++    void load_arch_tensors(llama_model_loader & ml) override;
++
++    template <bool iswa>
++    struct graph : public llm_graph_context {
++        graph(const llama_model & model, const llm_graph_params & params);
++    };
++
++    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
++};
++
++
+ struct llama_model_qwen3moe : public llama_model_base {
+     llama_model_qwen3moe(const struct llama_model_params & params) : llama_model_base(params) {}
+     void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/models/open1b.cpp b/src/models/open1b.cpp
+new file mode 100644
+index 000000000..9d8489ffd
+--- /dev/null
++++ b/src/models/open1b.cpp
+@@ -0,0 +1,182 @@
++#include "models.h"
++
++// Gensyn open-1b: a 1.6B decoder-only LM, Llama-3-derived with these deltas:
++//   - gain-free per-head RMSNorm on Q and K before RoPE
++//   - RMSNorm on the token-embedding output
++//   - hybrid sliding-window attention (last layer of each group + final layer full)
++//   - untied input embedding and LM head
++//   - interleaved-pair (GGML_ROPE_TYPE_NORM) RoPE
++// All attention/FFN linears were trained with int8 W8A8 LSQ QAT; the released
++// master weights are used directly here (equivalent to quantized_forward=false).
++
++void llama_model_open1b::load_arch_hparams(llama_model_loader & ml) {
++    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
++
++    // hybrid sliding-window attention: the last layer of each group of
++    // `sliding_window_pattern` layers is full-causal, the rest slide; the
++    // final layer is always full-causal.
++    const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
++    if (found_swa && hparams.n_swa > 0) {
++        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
++
++        uint32_t swa_period = 5;
++        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
++        hparams.set_swa_pattern(swa_period);
++        // open-1b forces the final layer to full causal attention
++        hparams.is_swa_impl[hparams.n_layer() - 1] = 0;
++    } else {
++        hparams.swa_type = LLAMA_SWA_TYPE_NONE;
++    }
++
++    type = LLM_TYPE_1B;
++}
++
++void llama_model_open1b::load_arch_tensors(llama_model_loader &) {
++    LLAMA_LOAD_LOCALS;
++
++    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
++    tok_norm = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight", 0), {n_embd}, 0);
++
++    // output
++    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
++    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
++    // if output is NULL, init from the input tok embed
++    if (output == NULL) {
++        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
++    }
++
++    for (int i = 0; i < n_layer; ++i) {
++        auto & layer = layers[i];
++
++        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
++
++        create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_gqa, n_embd_gqa, 0);
++        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
++
++        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
++        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
++        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
++        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
++    }
++}
++
++std::unique_ptr<llm_graph_context> llama_model_open1b::build_arch_graph(const llm_graph_params & params) const {
++    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
++        return std::make_unique<graph<true>>(*this, params);
++    }
++    return std::make_unique<graph<false>>(*this, params);
++}
++
++template <bool iswa>
++llama_model_open1b::graph<iswa>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
++    const int64_t n_embd_head = hparams.n_embd_head_k();
++
++    GGML_ASSERT(n_embd_head == hparams.n_embd_head_v());
++    GGML_ASSERT(n_embd_head == n_rot);
++
++    ggml_tensor * cur;
++    ggml_tensor * inpL;
++
++    inpL = build_inp_embd(model.tok_embd);
++    inpL = build_norm(inpL, model.tok_norm, NULL, LLM_NORM_RMS, -1);
++    cb(inpL, "inp_norm", -1);
++
++    // inp_pos - contains the positions
++    ggml_tensor * inp_pos = build_inp_pos();
++
++    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
++    inp_attn_type * inp_attn = nullptr;
++    if constexpr (iswa) {
++        inp_attn = build_attn_inp_kv_iswa();
++    } else {
++        inp_attn = build_attn_inp_kv();
++    }
++
++    ggml_tensor * inp_out_ids = build_inp_out_ids();
++
++    for (int il = 0; il < n_layer; ++il) {
++        float freq_base_l  = freq_base;
++        float freq_scale_l = freq_scale;
++
++        if constexpr (iswa) {
++            freq_base_l  = model.get_rope_freq_base (cparams, il);
++            freq_scale_l = model.get_rope_freq_scale(cparams, il);
++        }
++
++        res->t_layer_inp[il] = inpL;
++
++        ggml_tensor * inpSA = inpL;
++
++        // norm
++        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "attn_norm", il);
++
++        // self-attention
++        {
++            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
++                    n_embd_head, n_head, n_head_kv, il);
++
++            // gain-free per-head RMSNorm on Q and K before RoPE
++            Qcur = build_norm(Qcur, NULL, NULL, LLM_NORM_RMS, il);
++            Qcur = ggml_rope_ext(
++                    ctx0, Qcur, inp_pos, nullptr,
++                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                    ext_factor, attn_factor, beta_fast, beta_slow);
++            cb(Qcur, "Qcur", il);
++
++            Kcur = build_norm(Kcur, NULL, NULL, LLM_NORM_RMS, il);
++            Kcur = ggml_rope_ext(
++                    ctx0, Kcur, inp_pos, nullptr,
++                    n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
++                    ext_factor, attn_factor, beta_fast, beta_slow);
++            cb(Kcur, "Kcur", il);
++            cb(Vcur, "Vcur", il);
++
++            // default scale 1/sqrt(head_dim), as in the reference SDPA
++            cur = build_attn(inp_attn,
++                    model.layers[il].wo, NULL, model.layers[il].wo_s,
++                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
++        }
++        if (il == n_layer - 1 && inp_out_ids) {
++            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
++            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
++        }
++        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
++        cb(ffn_inp, "ffn_inp", il);
++
++        // feed-forward network
++        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
++        cb(cur, "ffn_norm", il);
++
++        cur = build_ffn(cur,
++                model.layers[il].ffn_up,   NULL, NULL,
++                model.layers[il].ffn_gate, NULL, NULL,
++                model.layers[il].ffn_down, NULL, NULL,
++                NULL,
++                LLM_FFN_SILU, LLM_FFN_PAR, il);
++        cb(cur, "ffn_out", il);
++
++        cur = ggml_add(ctx0, cur, ffn_inp);
++
++        cur = build_cvec(cur, il);
++        cb(cur, "l_out", il);
++
++        // input for next layer
++        inpL = cur;
++    }
++    cur = inpL;
++
++    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
++    cb(cur, "result_norm", -1);
++    res->t_embd = cur;
++
++    // lm_head
++    cur = build_lora_mm(model.output, cur, model.output_s);
++    cb(cur, "result_output", -1);
++    res->t_logits = cur;
++
++    ggml_build_forward_expand(gf, cur);
++}
++
++template struct llama_model_open1b::graph<false>;
++template struct llama_model_open1b::graph<true>;

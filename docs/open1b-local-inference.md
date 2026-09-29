@@ -25,7 +25,7 @@ Reference SHA-256 (and our output — identical):
 | Item | Path | Notes |
 |------|------|-------|
 | HF checkpoint (fp32) | `models/open-1b-sft/model.safetensors` | 6,432,081,672 B; dtype **F32**; header 34560 B |
-| Reference GGUF (f16) | `models/open-1b-sft-f16.gguf` | 3,220,153,856 B; vendor converter; **read-only oracle** |
+| Reference GGUF (f16) | `models/open-1b-sft-f16.gguf` | 3,220,153,856 B; produced by llama.cpp `convert_hf_to_gguf.py` + our local Open1B patch; **read-only oracle** |
 | HF config | `models/open-1b-sft/config.json` | `model_type=open1b`, 24 layers, hidden 2048, heads 16/4, head_dim 128, ffn 5632, vocab 128256, rope_theta 5e5, rms_eps 1e-5, swa 512 every 5, qk_norm gain-free, embedding_norm, untied |
 | Vendor Python | `models/open-1b-sft/modeling_open1b.py` | read only, never executed |
 | Engine | `/root/projects/inference/build-vulkan/bin/llama-server` | symlink → `/mnt/2TB/projects/build-vulkan`; shared prod tree, untouched |
@@ -298,7 +298,7 @@ Both the test server (:8085) and a diagnostic server (:8086) were stopped;
    | `\n\n\n` | `\n1. **Earth**: …` (coherent) |
    | ` ` | `\nSure, here are two names…` (coherent) |
 
-   Because our GGUF is byte-identical to the vendor reference, this is a
+   Because our GGUF is byte-identical to the reference GGUF, this is a
    property of the released checkpoint/GGUF (likely SFT formatting), not of our
    conversion. Workarounds for consumers: use `ignore_eos` + trim, seed the
    assistant turn, or fix the template's trailing newline.
