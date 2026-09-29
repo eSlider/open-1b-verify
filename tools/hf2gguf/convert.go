@@ -1,6 +1,6 @@
 package main
 
-// convert.go — emit models/open-1b-sft-f16-go.gguf from the HF safetensors,
+// convert.go converts the HF safetensors into models/open-1b-sft-f16-go.gguf,
 // reproducing the reference GGUF's metadata (verbatim) and tensor set/order.
 //
 // Tensor mapping (HF FQN -> GGUF name), shapes are the reference's (ggml ne0 is
@@ -117,7 +117,7 @@ func cmdConvert(args []string) error {
 	defer st.Close()
 
 	// Validate HF config against the reference contract (no values are taken from
-	// it — the reference is authoritative — but mismatches are fatal).
+	// it (the reference is authoritative), but mismatches are fatal).
 	if *hfConfig != "" {
 		if err := validateConfig(*hfConfig, kvs); err != nil {
 			return fmt.Errorf("config validation: %w", err)

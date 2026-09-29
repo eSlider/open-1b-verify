@@ -1,6 +1,6 @@
 package main
 
-// verify.go — prove the emitted GGUF equals the reference: identical metadata
+// verify.go proves the emitted GGUF equals the reference: identical metadata
 // (keys, types, values; verified on raw wire bytes) and identical tensor set,
 // shapes, ggml types and per-tensor payload bytes.
 
