@@ -35,7 +35,7 @@ func main() {
 }
 
 // ---------------------------------------------------------------------------
-// Manifest types — the reproduction contract.
+// Manifest types for the reproduction contract.
 // ---------------------------------------------------------------------------
 
 type manifest struct {

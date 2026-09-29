@@ -1,6 +1,6 @@
 package main
 
-// hfconfig.go — parse and validate the HF config/tokenizer against the
+// hfconfig.go parses and validates the HF config/tokenizer against the
 // reference GGUF metadata. The reference remains authoritative for values; this
 // only proves the reference is consistent with the published HF files and that
 // we parsed them (per the task), it does not source any GGUF value from them.

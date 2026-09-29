@@ -1,38 +1,38 @@
-# Inference stack — how llama.cpp was built and launched
+# Inference stack: how llama.cpp was built and launched
 
-This documents the exact engine used to run **open-1b** locally, and answers the
-fair question: *is the llama.cpp build stock?* **No.**
+This records the engine behind the local run. Is the llama.cpp build stock? No.
 
-## Engine provenance — not stock
+## Provenance
 
 | | |
-|---|---|
-| **Upstream base** | `ggerganov/llama.cpp` @ `c32d1dabe` — "tests : increase tolerance for Add fusion tests (#28691)", 2026-09-10 |
-| **Local changes** | uncommitted patches adding the **`open1b`** architecture (9 files, +299 lines) |
-| **Exported patch** | [`llama-cpp-open1b.patch`](llama-cpp-open1b.patch) |
-| **Build** | `-DGGML_VULKAN=ON -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release` |
-| **Binary** | `build-vulkan/bin/llama-server` — `0.4.0-dev (build 10893, commit c32d1dabe)` |
+| --- | --- |
+| Upstream base | `ggerganov/llama.cpp` at `c32d1dabe`, 2026-09-10 |
+| Local changes | uncommitted patches adding the `open1b` architecture, 9 files, +299 lines |
+| Patch | [llama-cpp-open1b.patch](llama-cpp-open1b.patch) |
+| Build | `-DGGML_VULKAN=ON -DGGML_NATIVE=ON -DCMAKE_BUILD_TYPE=Release` |
+| Binary | `build-vulkan/bin/llama-server`, `0.4.0-dev`, build 10893 |
 
-**Why the patch is required.** Upstream llama.cpp has no `open1b` architecture. open-1b
-is Llama-3-derived but differs in four ways that the loader/graph must know about:
+Upstream has no `open1b` architecture, so the patch is required. open-1b is
+Llama-3-derived, with four differences the loader and graph must know about:
 
-- gain-free per-head RMSNorm on Q and K before RoPE (`qk_norm`, no learnable gain);
-- RMSNorm on the **token-embedding output** (`embedding_norm`);
-- **hybrid sliding-window attention** (512-token window, full causal on the last layer of each group of 5 and on the final layer);
-- **untied** input embedding / LM head, and interleaved-pair RoPE (`LLAMA_ROPE_TYPE_NORM`).
+- gain-free per-head RMSNorm on Q and K before RoPE,
+- RMSNorm on the token-embedding output,
+- hybrid sliding-window attention, 512 tokens, full causal on the last layer of
+  each group of five and on the final layer,
+- untied embedding and LM head, with interleaved-pair RoPE.
 
 ## Patch inventory
 
 | File | Change |
-|---|---|
-| `src/models/open1b.cpp` | **new** — `llama_model_open1b`: hparams, tensor mapping, graph |
-| `src/models/models.h` | declare `llama_model_open1b` |
-| `src/llama-arch.h` / `.cpp` | add `LLM_ARCH_OPEN1B` (enum + name) |
-| `src/llama-model.cpp` | dispatch `LLM_ARCH_OPEN1B`; RoPE type `NORM` |
-| `gguf-py/gguf/constants.py` | `MODEL_ARCH.OPEN1B`, arch name, tensor list |
-| `gguf-py/gguf/tensor_mapping.py` | HF → GGUF tensor name map |
+| --- | --- |
+| `src/models/open1b.cpp` | new: `llama_model_open1b`, hparams, tensors, graph |
+| `src/models/models.h` | declare the model |
+| `src/llama-arch.h`, `.cpp` | add `LLM_ARCH_OPEN1B` |
+| `src/llama-model.cpp` | dispatch the arch, set the RoPE type |
+| `gguf-py/gguf/constants.py` | arch enum, name, tensor list |
+| `gguf-py/gguf/tensor_mapping.py` | HF to GGUF tensor names |
 | `conversion/__init__.py` | register the converter |
-| `conversion/open1b.py` | **new** — `Open1BModel` HF→GGUF converter |
+| `conversion/open1b.py` | new: `Open1BModel` converter |
 
 ## Build
 
@@ -57,35 +57,33 @@ setsid --fork ./build-vulkan/bin/llama-server \
   --host 127.0.0.1 --port 8085 >/tmp/open1b.log 2>&1 </dev/null &
 ```
 
-| Flag | Why |
-|---|---|
-| `--device Vulkan2` | a single Intel Arc B580 (Vulkan1/2/3 = the three Arc; Vulkan0 = AMD iGPU) |
+| Flag | Reason |
+| --- | --- |
+| `--device Vulkan2` | one Intel Arc B580. Vulkan1 to 3 are the three Arc cards; Vulkan0 is the AMD iGPU. |
 | `-ngl 99` | offload all layers |
-| `-fa off` | Flash-Attention crashes on these Arc/Vulkan builds; KV thus stays f16 |
-| `-c 32768` | requested, but capped to the model's **4096**-token context |
-| `--spec-type ngram-map-k,ngram-cache` | ~×2.4 decode on small dense models |
+| `-fa off` | Flash-Attention crashes on these Arc/Vulkan builds, so the KV cache stays in f16 |
+| `-c 32768` | requested, capped to the model's 4096-token context |
+| `--spec-type ngram-map-k,ngram-cache` | about 2.4x decode on small dense models |
 | `--jinja` | use the model's chat template |
 
 ## Pipeline
 
 ```mermaid
 flowchart LR
-  HF["HF checkpoint\nmodel.safetensors (fp32)"] --> GO["tools/hf2gguf\n(pure Go)"]
-  GO --> GGUF["open-1b-sft-f16-go.gguf\n(f16, byte-identical to reference)"]
-  GGUF --> LC["llama.cpp Vulkan\nupstream c32d1dabe\n+ open1b.patch"]
-  LC --> GPU["Intel Arc B580\n(Vulkan2)"]
-  GPU --> API["llama-server\nHTTP /completion"]
+  HF["HF checkpoint<br/>model.safetensors, fp32"] --> GO["tools/hf2gguf<br/>Go"]
+  GO --> GGUF["open-1b-sft-f16-go.gguf<br/>f16"]
+  GGUF --> LC["llama.cpp Vulkan<br/>upstream plus open1b patch"]
+  LC --> GPU["Intel Arc B580"]
+  GPU --> API["llama-server<br/>HTTP /completion"]
 ```
 
-## Caveats
+## Notes
 
-- **The patch is ours and uncommitted.** It lives only in the working tree of the
-  build source; `llama-cpp-open1b.patch` is its export. For reproducibility it should
-  be committed and, ideally, proposed upstream.
-- **The "reference" GGUF is not an independent vendor artifact.** It was produced by
-  llama.cpp's `convert_hf_to_gguf.py` **with this same Open1B patch**. Our Go converter
-  reproduces it byte-for-byte — a genuine independent reimplementation of the GGUF
-  serialization — but "byte-identical to the reference" means *identical to our patched
-  Python path*, not to a Gensyn-published file.
-- Patch quality: written for bring-up and validated by a working inference run; not
-  reviewed upstream.
+- The patch is ours and uncommitted. The exported patch file makes the build
+  reproducible. Committing it, or proposing it upstream, would be better.
+- The reference GGUF is not an independent artifact. It came from llama.cpp's
+  `convert_hf_to_gguf.py` with this same patch. The Go converter reproduces it
+  byte for byte, which is a real reimplementation of the GGUF writer, but the
+  comparison is against our own patched Python output, not a file published by
+  Gensyn.
+- The patch was written for bring-up. It is not upstream-reviewed.

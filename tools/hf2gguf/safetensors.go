@@ -1,6 +1,6 @@
 package main
 
-// safetensors.go — minimal read-only HuggingFace safetensors index.
+// safetensors.go reads a minimal, read-only HuggingFace safetensors index.
 //
 // Format: [u64 LE header_len][header_len bytes of JSON][tensor data ...].
 // The JSON header maps tensor name -> {dtype, shape, data_offsets:[start,end]}
