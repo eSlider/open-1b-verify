@@ -1,12 +1,54 @@
-# open-1b: an independent check, and a local run
+# open-1b: an independent check, a local run, and a Go GGUF converter
 
-We looked at Gensyn's open-1b and its claim of auditable training, then ran the
-model on our own hardware. The audit uses Gensyn's official harness. Everything
-we wrote is Go.
+We checked Gensyn's open-1b and its claim of auditable training, then ran the
+model on our own hardware. The audit uses Gensyn's official harness. The
+conversion and tooling are Go.
 
 Links: [announcement](https://www.gensyn.ai/news/introducing-open-1b-auditable-training),
 [harness](https://github.com/gensyn-ai/open-transformers),
 [audit app](https://open1b.gensyn.ai/).
+
+## hf2gguf
+
+`tools/hf2gguf` is the tool at the center of this repo. It converts a Hugging
+Face open-1b checkpoint to GGUF and checks the result byte for byte, with no
+Python, no torch, and no pip. For open-1b it reproduces llama.cpp's converter
+output exactly, down to the same SHA-256.
+
+Why build it this way:
+
+| | hf2gguf | llama.cpp `convert_hf_to_gguf.py` |
+| --- | --- | --- |
+| Runtime | one Go binary | Python 3 with torch, numpy, transformers, gguf-py |
+| Setup | `go build` | pip or uv, wheels, pinned versions |
+| Startup | immediate | imports torch and its chain |
+| Memory | streams one tensor at a time | loads tensors through torch |
+| Output check | built-in byte-level `verify` | none |
+| Output | byte-identical to a reference file | the reference |
+| Scope | open-1b only | many architectures |
+| Quantization | none, F16 only | many quant types |
+
+It is deliberately narrow. It maps one Llama-derived architecture and copies the
+GGUF metadata from a reference file, so it is not a general converter. Its value
+is that it is small, readable, dependency-free, and able to prove the file it
+writes is identical to the reference.
+
+```bash
+cd tools/hf2gguf
+go build -o hf2gguf .
+./hf2gguf convert -ref models/open-1b-sft-f16.gguf \
+    -safetensors models/open-1b-sft/model.safetensors \
+    -config models/open-1b-sft/config.json \
+    -tokenizer-config models/open-1b-sft/tokenizer_config.json \
+    -tokenizer models/open-1b-sft/tokenizer.json \
+    -o models/open-1b-sft-f16-go.gguf
+./hf2gguf verify -ref models/open-1b-sft-f16.gguf -got models/open-1b-sft-f16-go.gguf
+```
+
+`verify` reports 39 of 39 metadata keys and 220 of 220 tensors identical. The two
+files share SHA-256
+`a18530417c732bb115a3501a7e1388ea7a54bd2a96c70be571d1249aa210fbae`.
+See [tools/hf2gguf/README.md](tools/hf2gguf/README.md).
 
 ## Results
 
@@ -51,13 +93,13 @@ flowchart LR
 ## Repository layout
 
 ```
+tools/hf2gguf/          # the Go converter: dump, convert, verify
 docs/
   audit-open1b-init.md
   open1b-local-inference.md
   benchmarks.md
   inference-stack.md
   llama-cpp-open1b.patch
-tools/hf2gguf/
 ```
 
 ## The audit, and its limits
@@ -79,29 +121,6 @@ per-step claim stays untested here. Three more reasons to be careful:
 
 A match shows that the pinned artifacts reproduce the published commitment on
 our machine. It does not show how the original run was carried out.
-
-## Conversion in Go
-
-`tools/hf2gguf` reads the Hugging Face checkpoint (config.json,
-model.safetensors, tokenizer.json) and writes a GGUF file, using
-[go-gguf](https://github.com/cymertek/go-gguf). A reference GGUF from llama.cpp's
-converter, built with our open1b patch, is read only, as the schema to match.
-
-```bash
-cd tools/hf2gguf
-go build -o hf2gguf .
-./hf2gguf convert -ref models/open-1b-sft-f16.gguf \
-    -safetensors models/open-1b-sft/model.safetensors \
-    -config models/open-1b-sft/config.json \
-    -tokenizer-config models/open-1b-sft/tokenizer_config.json \
-    -tokenizer models/open-1b-sft/tokenizer.json \
-    -o models/open-1b-sft-f16-go.gguf
-./hf2gguf verify -ref models/open-1b-sft-f16.gguf -got models/open-1b-sft-f16-go.gguf
-```
-
-`verify` reports 39 of 39 metadata keys and 220 of 220 tensors identical. The two
-files share SHA-256
-`a18530417c732bb115a3501a7e1388ea7a54bd2a96c70be571d1249aa210fbae`.
 
 ## Running the model
 

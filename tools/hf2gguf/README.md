@@ -1,10 +1,46 @@
 # hf2gguf
 
-A Go 1.27 tool that converts a Hugging Face `open-1b` safetensors checkpoint to
-GGUF, byte-identical to a supplied reference file, with a byte-level verifier.
+A Go 1.27 tool that converts a Hugging Face open-1b checkpoint to GGUF and
+verifies the result byte for byte. No Python, no torch, no pip. Library:
+[go-gguf](https://github.com/cymertek/go-gguf).
 
-Library: [go-gguf](https://github.com/cymertek/go-gguf), reader and writer. No
-Python anywhere.
+For open-1b it reproduces llama.cpp's `convert_hf_to_gguf.py` output exactly,
+down to the same SHA-256. The output is deterministic and the check is built in,
+so the conversion can be trusted without trusting a Python environment.
+
+## Why Go, and why this shape
+
+| | hf2gguf | llama.cpp `convert_hf_to_gguf.py` |
+| --- | --- | --- |
+| Runtime | one Go binary | Python 3 with torch, numpy, transformers, gguf-py |
+| Setup | `go build` | pip or uv, wheels, pinned versions |
+| Startup | immediate | imports torch and its chain |
+| Memory | streams one tensor at a time, O(1) per tensor | loads tensors through torch |
+| Output check | built-in byte-level `verify` | none |
+| Output | byte-identical to a reference file | the reference |
+| Scope | open-1b only | many architectures |
+| Quantization | none, F16 only | many quant types |
+| Dependencies | go-gguf | a large Python tree |
+
+The advantages that matter here:
+
+- No Python runtime. Nothing to install or pin, and it runs where Python is
+  unavailable or unwanted.
+- Deterministic output, checked byte for byte against a reference.
+- Small and readable. One binary, one small module, no large dependency tree.
+- Streaming. Tensors are converted one at a time; memory does not grow with the
+  model size.
+- Easy to build and ship. `go build` and a single file in CI images.
+
+## Limits
+
+- Narrow by design. It maps one Llama-derived architecture and does not claim to
+  convert arbitrary models.
+- Metadata is copied from a reference GGUF, not derived from the config alone.
+  The config and tokenizer are parsed and validated, but the reference stays
+  authoritative.
+- F16 only. There is no quantization to Q4, Q8, or other ggml types.
+- It depends on a third-party GGUF writer for serialization.
 
 ## Build
 
